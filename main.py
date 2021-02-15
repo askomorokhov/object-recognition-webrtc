@@ -7,9 +7,13 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
+import objdet
+
 app = FastAPI()
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+model = objdet.load_model(objdet.MODEL_NAME)
 
 @app.get('/', response_class=HTMLResponse)
 async def index():
@@ -27,6 +31,9 @@ async def index():
             <a class="pure-button pure-button-primary" href="/video">Video</a>
             <a class="pure-button pure-button-primary" href="/stats">Stats</a>
         </center>
+        <p>
+            Some text.
+        </p>
     </body>
 </html>
 '''
@@ -118,10 +125,17 @@ async def video():
 @app.post('/image')
 async def image(threshold: float = Form(float), image: UploadFile = File(...)):
     image_object = Image.open(image.file)
-    print(f'>>>>>> request, image size: {image_object.size}')
-    obj_above_thresh = 0
 
-    responce = []
+    output_dict = objdet.run_inference_for_single_image(model, image_object)
+
+    classes = output_dict['detection_classes']
+    scores = output_dict['detection_scores']
+    boxes = output_dict['detection_boxes']
+
+    obj_above_thresh = sum(n > threshold for n in scores)
+    print(f'detected {obj_above_thresh} objects in image above a {threshold} score')
+
+    output = []
 
     # Add some metadata to the output
     item = {
@@ -129,10 +143,27 @@ async def image(threshold: float = Form(float), image: UploadFile = File(...)):
         'numObjects': int(obj_above_thresh),
         'threshold': threshold
     }
-    responce.append(item)
+    output.append(item)
 
-    print(f'>>>>>> responce: {responce}')
-    return {'resp': responce}
+    for c in range(0, len(classes)):
+        # only return confidences equal or greater than the threshold
+        if scores[c] >= threshold:
+            print(f'object {classes[c]}, score: {scores[c]}, coordinates: {boxes[c]}')
+            class_name = objdet.category_index.get(classes[c], 'Unknown')
+            item = {
+                'name': 'Object',
+                'class_name': class_name,
+                'score': float(scores[c]),
+                'y': float(boxes[c][0]),
+                'x': float(boxes[c][1]),
+                'height': float(boxes[c][2]),
+                'width': float(boxes[c][3])
+            }
+
+            output.append(item)
+
+    print(f'>>>>>> output: {output}')
+    return {'resp': output}
 
 
 if __name__ == "__main__":
